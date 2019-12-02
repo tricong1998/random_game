@@ -15,7 +15,7 @@ router.post('/login', async function(req, res, next) {
     // console.log(req.session);
     // res.json('ok');
   } catch (e) {
-    return res.status(500).send({ error: e.toString()});
+    return res.status(400).send({ Error: e.toString()});
   }
 });
 

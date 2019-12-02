@@ -13,8 +13,13 @@ const testRouter = require('./routes/test');
 var session = require('express-session');
 const auth = require('./service/auth');
 const jwt = require('jsonwebtoken'); //we're using 'express-session' as 'session' here
+const cors = require('cors')
 
 var app = express();
+app.use(cors({
+  origin: '*',
+  optionsSuccessStatus: 200
+}))
 
 // view engine setup
 app.set('views', path.join(__dirname, 'views'));

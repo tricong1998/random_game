@@ -9,11 +9,8 @@ async function checkHash(pass) {
   return await bcrypt.compare(pass, process.env.PASS_HASH);
 }
 async function authenticate(name, pass) {
-    if (name !== process.env.GAME_USERNAME) {
+    if (name !== process.env.GAME_USERNAME || !checkHash(pass)) {
       throw new Error(`Invalid user: ${name}`)
-    }
-    if (!checkHash(pass)) {
-      throw new Error('Invalid password')
     }
     return createToken(process.env.GAME_USERNAME, process.env.ID);
 }
