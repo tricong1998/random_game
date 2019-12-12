@@ -2,12 +2,20 @@
   <b-card>
     <div slot="header" v-html="caption"></div>
     <b-table :dark="dark" :hover="hover" :striped="striped" :bordered="bordered" :small="small" :fixed="fixed" responsive="sm" :items="items" :fields="captions" :current-page="currentPage" :per-page="perPage" @row-clicked="rowClicked">
-      <template slot="status" slot-scope="data">
-        <b-badge :variant="getBadge(data.item.status)">{{data.item.status}}</b-badge>
-      </template>
+      <template slot="state" slot-scope="data">
+        <b-badge :variant="getBadge(data.item.state)">{{data.item.state}}</b-badge>
+      </template>    
     </b-table>
-    <nav>
-      <b-pagination :total-rows="totalRows" :per-page="perPage" v-model="currentPage" prev-text="Prev" next-text="Next" hide-goto-end-buttons/>
+    <nav v-if="isPaging">
+      <b-row>
+        <b-col>
+          <b-button :disabled="currentPage === 1" @click="prev" block variant="primary">Prev</b-button>
+        </b-col>
+        <b-col>
+          <b-button :disabled="!more" @click="next" block variant="primary">Next</b-button>   
+        </b-col>        
+      </b-row>   
+      <!-- <b-pagination :total-rows="totalRows" :per-page="perPage" v-model="currentPage" prev-text="Prev" next-text="Next" hide-goto-end-buttons/> -->
     </nav>
   </b-card>
 </template>
@@ -19,6 +27,14 @@ export default {
   name: 'c-table',
   inheritAttrs: false,
   props: {
+    more: {
+      type: Boolean,
+      default: false
+    },    
+    isPaging: {
+      type: Boolean,
+      default: true
+    },
     caption: {
       type: String,
       default: 'Table'
@@ -53,16 +69,15 @@ export default {
     },
     perPage: {
       type: Number,
-      default: 5
+      default: 10
     },
     dark: {
       type: Boolean,
       default: false
-    }
-  },
-  data: () => {
-    return {
-      currentPage: 1,
+    },
+    currentPage: {
+      type: Number,
+      default: 1      
     }
   },
   computed: {
@@ -70,22 +85,27 @@ export default {
       const items =  this.tableData
       return Array.isArray(items) ? items : items()
     },
-    totalRows: function () { return this.getRowCount() },
     captions: function() { return this.fields }
   },
   methods: {
     getBadge (status) {
-      return status === 'Active' ? 'success'
-        : status === 'Inactive' ? 'secondary'
-          : status === 'Pending' ? 'warning'
-            : status === 'Banned' ? 'danger' : 'primary'
-    },
-    getRowCount: function () {
-      return this.items.length
+      return status === 4 ? 'success'
+        : status === 3 ? 'secondary'
+          : status === 2 ? 'warning'
+            : status === 1 ? 'danger' : 'primary'
     },
     rowClicked (item) {
       this.$emit('row-clicked', item)
-    }
+    },
+    compact (txid) {
+      return txid.substring(0, 7) + '...';
+    },
+    next () {
+      this.$emit('next', ++this.currentPage);
+    },
+    prev () {
+      this.$emit('prev', --this.currentPage);
+    },        
   }
 }
 </script>

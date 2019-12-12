@@ -12,22 +12,35 @@ async function authenticate(name, pass) {
     if (name !== process.env.GAME_USERNAME || !checkHash(pass)) {
       throw new Error(`Invalid user: ${name}`)
     }
-    return createToken(process.env.GAME_USERNAME, process.env.ID);
+    return await createToken(process.env.GAME_USERNAME, process.env.ID, null ,true);
 }
 
-function createToken(user, id) {
+async function createToken(user, id, key, isAdmin) {
   const userData = {
     username: user,
-    _id: id  
+    _id: id
   }
   const payload = {
     username: userData.username,
-    id: userData._id
+    id: userData._id,
   }
+  if (key) {
+    payload.key = key;
+    payload.playerId = id;
+    console.log(`set key join: ${key}`);
+    console.log(`value: ${id}`);
+    await client.set(key, id);
+    console.log(`after set: ${await client.get(key)}`)
+  }
+
+  if (isAdmin) {
+    payload.isAdmin = true;
+  }
+
   // 2. then we use jwt to sign our payload with our secret defined on line 23
   let token = jwt.sign(payload, process.env.TOKEN_SECRET);
   // 3. lastly we send the token and some other info we feel clients might need to them in form of response
-  return { token, username: userData.username };
+  return { token, username: userData.username, isAdmin: isAdmin ? isAdmin : false };
 }
 
 function requiresLogin(req, res, next) {
@@ -37,13 +50,17 @@ function requiresLogin(req, res, next) {
     jwt.verify(token, process.env.TOKEN_SECRET, function (err, decoded) {
       if (!err) {
         req.decoded = decoded; // this add the decoded payload to the client req (request) object and make it available in the routes
+        console.log(decoded)
+        if (!decoded.isAdmin) {
+          return res.status(401).send({ Error: 'Invalid token supplied'});
+        }
         next();
       } else {
-        return res.status(403).send({ Error: 'Invalid token supplied'});
+        return res.status(401).send({ Error: 'Invalid token supplied'});
       }
     })
   } else {
-    return res.status(403).send({ Error: 'Authorization failed! Please provide a valid token' });
+    return res.status(401).send({ Error: 'Authorization failed! Please provide a valid token' });
   }  
   // if (req.session && req.session.userId) {
   //   return next();
@@ -56,21 +73,33 @@ function requiresLogin(req, res, next) {
 
 async function requireJoined(req, res, next) {
   var token = req.headers['x-access-token'] || req.body.token
+  console.log(token);
   if (token) {
     jwt.verify(token, process.env.TOKEN_SECRET, function (err, decoded) {
       if (!err) {
         // TODO using redis
         req.decoded = decoded; // this add the decoded payload to the client req (request) object and make it available in the routes
-        if (!client.get(decoded.id)) {
-          return res.status(403).send({ Error: 'Invalid token supplied'});
-        }
-        next();
+        console.log(decoded)
+        console.log(client)
+        client.get(decoded.key).then(rep => {
+          if (!rep) {
+            return res.status(401).send({ Error: 'Token is expired'});
+          }          
+          next();
+        })
+        // client.get(decoded.username, (err, reply) => {
+        //   if (!reply) {
+        //     return res.status(401).send({ Error: 'Invalid token supplied'});
+        //   }
+        //   next();
+        // });
       } else {
-        return res.status(403).send({ Error: 'Invalid token supplied'});
+        console.error(e);
+        return res.status(401).send({ Error: 'Invalid token supplied'});
       }
     })
   } else {
-    return res.status(403).send({ Error: 'Authorization failed! Please provide a valid token'});
+    return res.status(401).send({ Error: 'Authorization failed! Please provide a valid token'});
   }  
 }
 module.exports = {

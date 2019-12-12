@@ -35,7 +35,7 @@
       </b-dropdown-item>
       <b-dropdown-divider />
       <b-dropdown-item><i class="fa fa-shield" /> Lock Account</b-dropdown-item>
-      <b-dropdown-item><i class="fa fa-lock" /> Logout</b-dropdown-item>
+      <b-dropdown-item @click="logout"><i class="fa fa-lock" /> Logout</b-dropdown-item>
     </template>
   </AppHeaderDropdown>
 </template>
@@ -49,6 +49,11 @@ export default {
   },
   data: () => {
     return { itemsCount: 42 }
-  }
+  },
+  methods: {
+    logout() {
+      this.$auth.removeAuth();
+    }
+  },
 }
 </script>

@@ -10,9 +10,10 @@ const sha256 = require('sha256');
 const ranString = require('randomstring');
 const client = require('./redisClient');
 const countTime = require('./countTime');
+// const newService = require('./newService');
 const util = require('./util');
 
-async function join(from, gameId, pv) {
+async function join(from, gameId, pv, io) {
   try {
 
     let game = await getOneGame(gameId);
@@ -35,35 +36,39 @@ async function join(from, gameId, pv) {
 
     let players = await getPlayersGame(gameId);
 
-    console.log(players)
-
-    if (players.length >= game.numberOfPlayers) {
+    if (players.length >= game.numberPlayers) {
       throw new Error(`Game has had sufficient players`);
     }
 
     if (players.find(_player => _player.user === from)) {
       throw new Error(`Player has already joined game`);
     }
-    console.log(from)
     const result = await sendToken(from, game.admin, game.feeJoin, gameId, pv);
     await countTime.delay(1000);
     players = await getPlayersGame(gameId);
-    console.log(players);
 
     const player = players.find(_player => {
       return _player.user === from;
     });
-    console.log(player);
     if (!player) {
       throw new Error (`Join fail`)
     }
-    const token = auth.createToken(from, player.id);
+    let isFull = false;
+    const token = await auth.createToken(from, player.playerId, `${Const.prefixPlayer}${player.playerId}`);
+    io.emit('join', { gameId });
+    if (players.length >= game.numberPlayers) {
+      isFull = true;
+      startCommit(gameId, io);
+    };
+    // TODO socket
     return {
       result,
-      token
+      token,
+      isFull,
+      playerId: player.playerId,
     }
   } catch (e) {
-    throw new Error(e);
+    throw new Error(e.message ? e.message : e);
   }
 }
 
@@ -87,7 +92,7 @@ async function sendToken(from, to, amount, memo, pv) {
   try {
     return await sendTx(actions, pv);
   } catch (e) {
-    throw new Error(e);
+    throw new Error(e.message ? e.message : e);
   }
 }
 
@@ -110,20 +115,21 @@ async function sendTx(actions, pv) {
     console.dir(result);
     return result;
   } catch (e) {
-    console.error(e);
-    // console.log('\nCaught exception: ' + e);
-    if (e instanceof RpcError)
+    if (e instanceof RpcError) {
       console.error(JSON.stringify(e.json, null, 2));
-    throw new Error(e);
+      throw new Error(e.json.error.details[0].message ? e.json.error.details[0].message : e);
+    }
+
+    throw new Error(e.message ? e.message : e);
   }
 
 }
 
-async function init(numberOfPlayers, feeJoin, expireCommitTime, expireJoinTime, priceRatio) {
+async function init(numberOfPlayers, feeJoin, expireCommitTime, expireJoinTime, priceRatio, io) {
   const newFee = parseInt(new BigNumber(feeJoin).multipliedBy(new BigNumber(10).pow(process.env.SCALE)).toFixed(0));
   const from = process.env.ACCOUNT_RANDOM;
   const balance = await getAddressAvailableBalance(from);
-  const maxAmountLoss = new BigNumber(feeJoin).multipliedBy(numberOfPlayers).multipliedBy(priceRatio);
+  const maxAmountLoss = new BigNumber(feeJoin).multipliedBy(numberOfPlayers).multipliedBy(priceRatio).dividedBy(100);
   if (new BigNumber(balance).lt(maxAmountLoss.toFixed(parseInt(process.env.SCALE)))) {
     throw new Error(`Account has insufficient balance`);
   }
@@ -154,7 +160,10 @@ async function init(numberOfPlayers, feeJoin, expireCommitTime, expireJoinTime, 
   }];
   try {
     const result = await sendTx(actions, pv);
-    client.set(Const.prefixGameSecret + activeKeyHash, activeKey);
+    await client.set(`${Const.prefixGameSecret}${activeKeyHash}`, activeKey);
+    const a = await client.get(`${Const.prefixGameSecret}{activeKeyHash}`);
+    //TODO socket
+    io.emit('init');
     return {
       result,
       activeKey,
@@ -164,10 +173,18 @@ async function init(numberOfPlayers, feeJoin, expireCommitTime, expireJoinTime, 
     // }
     // countTime.callStartCommit()
   } catch (e) {
-    throw new Error(e);
-  }}
+    throw new Error(e.message ? e.message : e);
+  }
+}
 
-async function commit(user, hashSecret, playerId) {
+async function commit(user, playerId, secret, io) {
+
+  const _player = await getOnePlayer(playerId);
+  const hashSecret = sha256(secret);
+  if (!_player) {
+    throw new Error(`Player didn't join game`);
+  }
+  const gameId = _player.gameId;
   const game = await getOneGame(gameId);
 
   if (!game) {
@@ -178,13 +195,8 @@ async function commit(user, hashSecret, playerId) {
     throw new Error(`Game is not in commit state`);
   }
 
-  const players = await getPlayersGame(gameId);
-  const player = players.find(_player => players.user === user);
-  if (!player) {
-    throw new Error(`Player didn't join game`);
-  }
 
-  if (player.isCommit) {
+  if (_player.isCommit) {
     throw new Error(`Player has commited`);
   }
 
@@ -203,12 +215,15 @@ async function commit(user, hashSecret, playerId) {
     },
   }];
   try {
-    return await sendTx(actions, pv);
+    const res = await sendTx(actions, pv);
+    await client.set(`${Const.prefixSecretPlayer}${gameId}_${_player.playerId}`, secret);
+    io.emit('commit', { playerId });
+    return res;
   } catch (e) {
-    throw new Error(e);
+    throw new Error(e.message ? e.message : e);
   }}
 
-async function startCommit(gameId) {
+async function startCommit(gameId, io) {
   const from = process.env.ACCOUNT_RANDOM;
   const pv = process.env.PV;  
   const actions = [{
@@ -225,16 +240,19 @@ async function startCommit(gameId) {
   try {
     const result = await sendTx(actions, pv);
     const game = await getOneGame(gameId);
-    countTime.callAfterStartCommit(game);
+    io.emit('start_commit', { gameId });
+    await countTime.delay(2000);
+    countTime.callAfterStartCommit(game, startReveal, revealFull, io);
+    // TODO socket
     return {
       result,
     }
   } catch (e) {
-    throw new Error(e);
+    throw new Error(e.message ? e.message : e);
   }
 }
 
-async function startReveal(gameId, secret) {
+async function startReveal(gameId, secret, io) {
   const from = process.env.ACCOUNT_RANDOM;
   const pv = process.env.PV;
   const actions = [{
@@ -250,13 +268,16 @@ async function startReveal(gameId, secret) {
     },
   }];
   try {
-    return await sendTx(actions, pv);
+    const res = await sendTx(actions, pv);
+    io.emit('start_reveal', { gameId });
+    return res;
+    // TODO socket
   } catch (e) {
-    throw new Error(e);
+    throw new Error(e.message ? e.message : e);
   }
 }
 
-async function reveal(playerId, secret) {
+async function reveal(playerId, secret, io) {
   const pv = process.env.PV;
   const actions = [{
     account: process.env.ACCOUNT_RANDOM,
@@ -270,10 +291,37 @@ async function reveal(playerId, secret) {
       secret
     },
   }];
-  return await sendTx(actions, pv); 
+  await sendTx(actions, pv); 
+  io.emit('reveal', { playerId });
+  return;
 }
 
-async function endGame(gameId) {
+async function revealFull(gameId, io) {
+  const players = await getPlayersGame(gameId);
+  // await Promise.all(players.map(async _player => {
+
+  // }));
+  for (let i = 0; i < players.length; i++) {
+    if (players[i].isCommit !== 1) {
+      continue;
+    }
+    const secret = await client.get(`${Const.prefixSecretPlayer}${gameId}_${players[i].playerId}`);
+    await reveal(players[i].playerId, secret, io);
+    await countTime.delay(50);
+  }
+  await countTime.delay(5000);
+  await endGame(gameId, io);
+  // TODO socket
+}
+
+async function endGame(gameId, io) {
+  const players = await getPlayersGame(gameId);
+  await Promise.all(players.map(async _player => {
+    const key = `${Const.prefixPlayer}${_player.playerId}`;
+    if (await client.get(key)) {
+      await client.del(key);
+    }
+  }))
   const from = process.env.ACCOUNT_RANDOM;
   const pv = process.env.PV;
   const actions = [{
@@ -288,13 +336,15 @@ async function endGame(gameId) {
     },
   }];
   try {
-    return await sendTx(actions, pv);
+    const res = await sendTx(actions, pv);
+    io.emit('end_game', { gameId });
+    return res;
   } catch (e) {
-    throw new Error(e);
+    throw new Error(e.message ? e.message : e);
   }
 }
 
-async function cancel(gameId, playerId) {
+async function cancel(gameId, playerId, io) {
   const from = process.env.ACCOUNT_RANDOM;
   const pv = process.env.PV;
   const game = await getOneGame(gameId);
@@ -304,7 +354,7 @@ async function cancel(gameId, playerId) {
   }
 
   const players = await getPlayersGame(gameId);
-  if (players.length >= game.numberOfPlayers) {
+  if (players.length >= game.numberPlayers) {
     throw new Error(`Cannot cancel game if game has sufficient players`);
   }
 
@@ -325,9 +375,11 @@ async function cancel(gameId, playerId) {
     },
   }];
   try {
-    return await sendTx(actions, pv);
+    const res = await sendTx(actions, pv);
+    io.emit('cancel', { gameId });
+    return res;
   } catch (e) {
-    throw new Error(e);
+    throw new Error(e.message ? e.message : e);
   }
 }
 
@@ -339,6 +391,8 @@ async function getOneGame(gameId) {
       scope: process.env.ACCOUNT_RANDOM,         // Account that owns the data
       table: Const.gameTable,        // Table name
       lower_bound: gameId,     // Table primary key value
+      index_position: 1,
+      key_type: "i64",
       limit: 1,                   // Here we limit to 1 to get only the single row with primary key equal to 'testacc'
       reverse: false,             // Optional: Get reversed data
       show_payer: false,          // Optional: Show ram payer
@@ -350,20 +404,18 @@ async function getOneGame(gameId) {
     if (!games || !games.length) {
       throw new Error(`Game which has id: ${gameId} not found`);
     }
-    const game = games[0];
-    game.feeJoin = new BigNumber(game.feeJoin).dividedBy(new BigNumber(10).pow(process.env.SCALE)).toFixed(parseInt(process.env.SCALE));
+    let game = games[0];
+    game = await standardizeGame(game);
     return game;
   } catch (e) {
-    throw new Error(e);
+    throw new Error(e.message ? e.message : e);
   }
 }
 
 async function getPlayersGame(gameId) {
-  console.log(gameId)
   if (typeof gameId === 'string') {
     gameId = parseInt(gameId);
   }
-  console.log(gameId)
   try {
     const listgames = await rpc.get_table_rows({
       json: true,                 // Get the response as json
@@ -372,7 +424,7 @@ async function getPlayersGame(gameId) {
       table: Const.playerTable,        // Table name
       table_key: Const.gameIdColumn,           // Table secondary key name
       lower_bound: gameId,     // Table primary key value
-      // upper_bound: gameId,
+      upper_bound: gameId,
       index_position: 2,
       key_type: "i64",
       limit: 10,                   // Here we limit to 1 to get only the single row with primary key equal to 'testacc'
@@ -383,33 +435,38 @@ async function getPlayersGame(gameId) {
       throw new Error(`Game which has id: ${gameId} not found`);
     }
     const players = listgames.rows;
-    return players
-    // .filter(_player => {
-    //   console.log(_player.gameId)
-    //   return _player.gameId === gameId;
-    // });
+    return players;
   } catch (e) {
-    throw new Error(e);
+    throw new Error(e.message ? e.message : e);
   }  
 }
 
-async function getAllGame() {
+async function getAllGame(page = 1, limit = 10) {
   try {
     const games = await rpc.get_table_rows({
       json: true,               // Get the response as json
       code: process.env.ACCOUNT_RANDOM,      // Contract that we target
       scope: process.env.ACCOUNT_RANDOM,         // Account that owns the data
       table: Const.gameTable,        // Table name
+      lower_bound: (page-1)*10,
+      upper_bound: limit*2-1,
       limit: 10,                // Maximum number of rows that we want to get
-      reverse: false,           // Optional: Get reversed data
+      reverse: true,           // Optional: Get reversed data
       show_payer: false          // Optional: Show ram payer
     });
     if (!games || !games.rows) {
       throw new Error(`Server error`);
     }
-    return games.rows;
+    const result = await Promise.all(games.rows.map(_game => {
+      return standardizeGame(_game);
+    }))
+    return {
+      result,
+      more: games.more,
+    };
   } catch (e) {
-    throw new Error(e);
+    console.error(e)
+    throw new Error(e.message ? e.message : e);
   }
 }
 
@@ -420,8 +477,11 @@ async function getAllUnStarted() {
       code: process.env.ACCOUNT_RANDOM,      // Contract that we target
       scope: process.env.ACCOUNT_RANDOM,         // Account that owns the data
       table: Const.gameTable,        // Table name
-      table_key: Const.stateColumn,           // Table secondary key name
-      lower_bound: 1,            // Table secondary key value
+      table_key: Const.stateSecondIndex,           // Table secondary key name
+      index_position: 2,
+      key_type: "i64",
+      lower_bound: 0,            // Table secondary key value
+      upper_bound: 0,
       limit: 10,                   // Here we limit to 1 to get only row
       reverse: false,             // Optional: Get reversed data
       show_payer: false,          // Optional: Show ram payer
@@ -429,9 +489,12 @@ async function getAllUnStarted() {
     if (!games || !games.rows) {
       throw new Error(`Server error`);
     }
-    return games.rows;
+    const result = await Promise.all(games.rows.map(_game => {
+      return standardizeGame(_game);
+    }))
+    return result;
   } catch (e) {
-    throw new Error(e);
+    throw new Error(e.message ? e.message : e);
   }
 }
 
@@ -442,8 +505,11 @@ async function getAllFinished() {
       code: process.env.ACCOUNT_RANDOM,      // Contract that we target
       scope: process.env.ACCOUNT_RANDOM,         // Account that owns the data
       table: Const.gameTable,        // Table name
-      table_key: Const.stateColumn,           // Table secondary key name
+      table_key: 'bystate',           // Table secondary key name
+      index_position: 2,
+      key_type: "i64",
       lower_bound: 4,            // Table secondary key value
+      upper_bound: 4,
       limit: 10,                   // Here we limit to 1 to get only row
       reverse: false,             // Optional: Get reversed data
       show_payer: false,          // Optional: Show ram payer
@@ -451,9 +517,40 @@ async function getAllFinished() {
     if (!games || !games.rows) {
       throw new Error(`Server error`);
     }
-    return games.rows;
+    const result = await Promise.all(games.rows.map(_game => {
+      return standardizeGame(_game);
+    }))
+    return result;
   } catch (e) {
-    throw new Error(e);
+    throw new Error(e.message ? e.message : e);
+  }
+}
+
+async function getAllUnFinished() {
+  try {
+    const games = await rpc.get_table_rows({
+      json: true,                 // Get the response as json
+      code: process.env.ACCOUNT_RANDOM,      // Contract that we target
+      scope: process.env.ACCOUNT_RANDOM,         // Account that owns the data
+      table: Const.gameTable,        // Table name
+      table_key: 'bystate',           // Table secondary key name
+      index_position: 2,
+      key_type: "i64",
+      lower_bound: 0,            // Table secondary key value
+      upper_bound: 3,
+      limit: 10,                   // Here we limit to 1 to get only row
+      reverse: false,             // Optional: Get reversed data
+      show_payer: false,          // Optional: Show ram payer
+    });
+    if (!games || !games.rows) {
+      throw new Error(`Server error`);
+    }
+    const result = await Promise.all(games.rows.map(_game => {
+      return standardizeGame(_game);
+    }))
+    return result;
+  } catch (e) {
+    throw new Error(e.message ? e.message : e);
   }
 }
 
@@ -462,22 +559,18 @@ async function getOneTx(txId) {
     const tx = await rpc.history_get_transaction(txId);
     return util.standardizedTx(tx);
   } catch (e) {
-    throw new Error(e);
+    throw new Error(e.message ? e.message : e);
   }
 }
 
 async function getAddressBalance(account) {
-  console.log(`come here`);
-  console.log(process.env.CODE, account, process.env.TOKEN_NAME)
   const balances = await rpc.get_currency_balance(process.env.CODE, account, process.env.TOKEN_NAME);
-  console.log(balances)
   if (!balances.length) {
     throw new Error(`Account has insufficient balance`);
   }
   // if (new BigNumber(arr[0]).gt(game.feeJoin)) {
   //   throw new Error(`Account has insufficient balance`);
   // }
-  console.log(typeof balances)
   let balance;
   balances.forEach(_balance => {
     const arr = _balance.split(' ');
@@ -495,8 +588,10 @@ async function getOnePlayer(id) {
       json: true,                 // Get the response as json
       code: process.env.ACCOUNT_RANDOM,      // Contract that we target
       scope: process.env.ACCOUNT_RANDOM,         // Account that owns the data
-      table: Const.gameTable,        // Table name
+      table: Const.playerTable,        // Table name
       lower_bound: id,     // Table primary key value
+      index_position: 1,
+      key_type: "i64",
       limit: 1,                   // Here we limit to 1 to get only the single row with primary key equal to 'testacc'
       reverse: false,             // Optional: Get reversed data
       show_payer: false,          // Optional: Show ram payer
@@ -511,7 +606,7 @@ async function getOnePlayer(id) {
     const player = players[0];
     return player;
   } catch (e) {
-    throw new Error(e);
+    throw new Error(e.message ? e.message : e);
   }
 }
 
@@ -522,14 +617,57 @@ async function getAddressAvailableBalance(account) {
 }
 
 async function getBusyBalance() {
-  const allGames = await getAllGame();
-  const finishedGames = await getAllFinished();
-  const games = allGames.filter(_game => !finishedGames.find(__game => __game.id === _game.id));
+  const games = await getAllUnFinished();
   let balance = new BigNumber(0);
   games.forEach(game => {
-    balance.plus(new BigNumber(game.feeJoin).multipliedBy(game.numberOfPlayers));
+    console.log('game')
+    console.log(game)
+    const totalFee = new BigNumber(game.feeJoin).multipliedBy(game.numberPlayers);
+    const totalMaybeLose = new BigNumber(game.feeJoin).multipliedBy(game.priceRatio).dividedBy(100);
+    console.log(totalMaybeLose.toNumber())
+    console.log(totalFee.toNumber())
+
+    balance = balance.plus(totalFee).plus(totalMaybeLose);
   })
   return balance;
+}
+
+async function getOneGameDetail(gameId) {
+  const game = await this.getOneGame(gameId);
+  return game;
+}
+
+async function standardizeGame(game) {
+  game.feeJoin = new BigNumber(game.feeJoin).dividedBy(new BigNumber(10).pow(process.env.SCALE)).toFixed(parseInt(process.env.SCALE));
+  const players = await getPlayersGame(game.id);
+  game.joinedPlayer = players.length;
+  return game;
+}
+
+async function getPlayerGames(user) {
+  try {
+    const listgames = await rpc.get_table_rows({
+      json: true,                 // Get the response as json
+      code: process.env.ACCOUNT_RANDOM,      // Contract that we target
+      scope: process.env.ACCOUNT_RANDOM,         // Account that owns the data
+      table: Const.playerTable,        // Table name
+      table_key: Const.playerColumn,           // Table secondary key name
+      lower_bound: user,     // Table primary key value
+      upper_bound: user,
+      index_position: 2,
+      key_type: "name",
+      limit: 10,                   // Here we limit to 1 to get only the single row with primary key equal to 'testacc'
+      reverse: false,             // Optional: Get reversed data
+      show_payer: false,          // Optional: Show ram payer
+    });
+    if (!listgames) {
+      throw new Error(`Game which has id: ${gameId} not found`);
+    }
+    const players = listgames.rows;
+    return players;
+  } catch (e) {
+    throw new Error(e.message ? e.message : e);
+  }    
 }
 
 module.exports = {
@@ -552,5 +690,8 @@ module.exports = {
   getAddressAvailableBalance,
   getAddressBalance,
   getOnePlayer,
-  getBusyBalance
+  getBusyBalance,
+  getOneGameDetail,
+  revealFull,
+  getPlayerGames
 }

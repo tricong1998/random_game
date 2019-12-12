@@ -13,14 +13,23 @@ const testRouter = require('./routes/test');
 var session = require('express-session');
 const auth = require('./service/auth');
 const jwt = require('jsonwebtoken'); //we're using 'express-session' as 'session' here
-const cors = require('cors')
+const cors = require('cors');
+const io = require('socket.io')()
 
 var app = express();
+
 app.use(cors({
   origin: '*',
   optionsSuccessStatus: 200
 }))
 
+app.io = io;
+app.io.on('connection', function(socket){  
+  console.log(`there is one connection`)
+  socket.on('disconnect', () => {
+    console.log(`there is one disconnection`)
+  })}
+);
 // view engine setup
 app.set('views', path.join(__dirname, 'views'));
 app.set('view engine', 'jade');
@@ -39,9 +48,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/', indexRouter);
 app.use('/users', usersRouter);
 app.use('/list', listRouter);
-app.use('/game', auth.requiresLogin, gameRouter);
-app.use('/player', playerRouter);
-app.use('/test', auth.requiresLogin, testRouter);
+app.use('/game', auth.requiresLogin, gameRouter(app.io));
+app.use('/player', playerRouter(app.io));
+app.use('/test', testRouter);
 
 // catch 404 and forward to error handler
 app.use(function(req, res, next) {

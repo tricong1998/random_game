@@ -24,7 +24,8 @@
     "prettier-eslint": "^9.0.1",
     "randomstring": "^1.1.5",
     "redis": "^2.8.0",
-    "sha256": "^0.2.0"
+    "sha256": "^0.2.0",
+    "socket.io": "^2.3.0"
   },
   "devDependencies": {
     "eslint": "^6.6.0",

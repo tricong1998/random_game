@@ -21,15 +21,19 @@ const Const = {
   
   gameTable : 'games',
   playerTable : 'people',
-  stateColumn : 'state',
-  idColumn: 'id',
-  gameIdColumn: 'gameId',
-
+  stateSecondIndex : 'bystate',
+  idColumn: 'byid',
+  gameIdColumn: 'bygameid',
+  playerColumn: 'byplayer',
+  userColumn: 'byplayer',
   length: 12,
   typeRandomString: 'alphabetic',
 
   prefixGameSecret: 'secret_',
   prefixTokenPlayer: 'player_',
+  prefixSecretPlayer: 'secret_player_',
+  prefixPlayer: 'player_',
+
 
   gameJoinState: 0,
   gameCommitState: 1,

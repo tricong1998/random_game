@@ -17,6 +17,7 @@
                     <b-input-group-prepend><b-input-group-text><i class="icon-lock"></i></b-input-group-text></b-input-group-prepend>
                     <b-form-input v-model="password" type="password" class="form-control" placeholder="Password" autocomplete="current-password" />
                   </b-input-group>
+                  <!-- <b-alert v-if="error" show variant="danger">{{message}}</b-alert> -->
                   <b-row>
                     <b-col cols="6">
                       <b-button @click="login()" variant="primary" class="px-4">Login</b-button>
@@ -45,40 +46,59 @@
 </template>
 
 <script>
+import Const from '@/core/base/Const';
+import Toast from '@/core/base/Toast';
+
 export default {
   name: 'Login',
   data () {
     return {
       username: null,
       password: null,
+      message: '',
+      error: false,
     }
   },
   methods: {
     async login () {
       if (!this.username) {
         //TODO alert danger
+        this.error = true;
+        this.message = 'Username is required';
+        Toast.alertHide(`${this.message}`, 5000, Const.dangerLevel, Const.alertTitle)        
         return;
       }
       if (!this.password) {
         //TODO alert danger
+        this.error = true;
+        this.message = 'Password is required';
+        Toast.alertHide(`${this.message}`, 5000, Const.dangerLevel, Const.alertTitle)        
         return;
       }
+      this.error = false
       try {
-        console.log('login');
-        console.log(this.$auth);
         await this.$auth.login({ username: this.username, password: this.password });
-        //TODO alert sucessful
-        console.log('redirc');
+        Toast.alertHide('Successfully', 5000, Const.successLevel, Const.alertTitle)
         this.redirectAdminHome();
 
       } catch (e) {
         //TODO
-        console.log(e);
+        Toast.alertHide(`${e.toString()}`, 5000, Const.dangerLevel, Const.alertTitle)
+        this.error = true;
+        this.message = 'Username or Password is invalid';
       }
     },
 
     redirectAdminHome () {
-      this.$router.push('/dashboard')
+      this.$router.push({ name: 'Home' });
+    }
+  },
+
+  mounted() {
+    if (this.$auth._user) {
+      if (this.$auth._user.isAdmin) {
+        this.redirectAdminHome();
+      }
     }
   },
 }
